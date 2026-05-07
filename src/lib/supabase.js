@@ -7,4 +7,13 @@ if (!supabaseUrl || !supabaseKey) {
   throw new Error('Missing Supabase credentials. Check your .env file')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey)
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    params: {
+      eventsPerSecond: 100, // Limita eventos/segundo
+    },
+  },
+  db: {
+    schema: 'public',
+  },
+})
