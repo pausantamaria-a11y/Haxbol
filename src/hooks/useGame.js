@@ -24,7 +24,7 @@ export function useGame(gameId, userId) {
   const scoresRef = useRef(scores)
   const isHostRef = useRef(false)
   const rafRef = useRef(null)
-  const lastPosUpdateTimeRef = useRef(0)
+  const syncIntervalRef = useRef(null)
 
   ballRef.current = ball
   playersRef.current = players
@@ -174,18 +174,41 @@ export function useGame(gameId, userId) {
     }
   }, [])
 
-  // Game loop
+  // Position sync loop - SEPARATE from game loop
+  useEffect(() => {
+    if (gameStatus !== 'playing') return
+
+    syncIntervalRef.current = setInterval(() => {
+      const me = playersRef.current.find(p => p.user_id === userId)
+      if (me && gameId && userId) {
+        console.log(`📍 Syncing position: x=${Math.round(me.x)}, y=${Math.round(me.y)}`)
+        supabase
+          .from('player_positions')
+          .upsert({
+            game_id: gameId,
+            user_id: userId,
+            x: me.x,
+            y: me.y,
+          })
+          .catch(err => console.error('❌ Position sync error:', err))
+      }
+    }, 30) // Envía cada 30ms
+
+    return () => {
+      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current)
+    }
+  }, [gameStatus, gameId, userId])
+
+  // Game loop - ONLY for physics and state updates
   useEffect(() => {
     if (gameStatus !== 'playing') return
 
     let lastBallUpdate = 0
-    let lastPosUpdate = 0
-    const POS_UPDATE_INTERVAL = 30 // Envía posición cada 30ms (~33 FPS)
 
     const loop = (ts) => {
       rafRef.current = requestAnimationFrame(loop)
 
-      // Update my player position from keys and SYNC TO DB
+      // Update my player position from keys
       setPlayers(prev => {
         let dx = 0, dy = 0
         for (const key of Object.keys(keysDown.current)) {
@@ -197,7 +220,7 @@ export function useGame(gameId, userId) {
           dy = (dy / len) * PLAYER.SPEED
         }
 
-        const updated = prev.map(p => {
+        return prev.map(p => {
           if (p.user_id !== userId) return p
           const newVx = (p.vx || 0) * PLAYER.FRICTION + dx
           const newVy = (p.vy || 0) * PLAYER.FRICTION + dy
@@ -209,27 +232,6 @@ export function useGame(gameId, userId) {
             vy: newVy,
           }
         })
-
-        // Envía la posición del jugador AQUÍ, donde sabemos el estado actual
-        if (ts - lastPosUpdate > POS_UPDATE_INTERVAL) {
-          lastPosUpdate = ts
-          const me = updated.find(p => p.user_id === userId)
-          if (me) {
-            supabase
-              .from('player_positions')
-              .upsert({
-                game_id: gameId,
-                user_id: userId,
-                x: me.x,
-                y: me.y,
-              })
-              .catch(err => {
-                console.error('❌ Error updating position:', err)
-              })
-          }
-        }
-
-        return updated
       })
 
       // Only host runs physics for ball
@@ -270,7 +272,7 @@ export function useGame(gameId, userId) {
             y: result.ball.y,
             vx: result.ball.vx,
             vy: result.ball.vy,
-          }).eq('game_id', gameId).catch(err => console.error('❌ Error updating ball:', err))
+          }).eq('game_id', gameId).catch(err => console.error('❌ Ball sync error:', err))
         }
       }
     }
