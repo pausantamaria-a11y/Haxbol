@@ -24,6 +24,8 @@ export function useGame(gameId, userId) {
   const scoresRef = useRef(scores)
   const isHostRef = useRef(false)
   const rafRef = useRef(null)
+  const lastPosRef = useRef(null)
+  const lastPosUpdateTimeRef = useRef(0)
 
   ballRef.current = ball
   playersRef.current = players
@@ -177,8 +179,8 @@ export function useGame(gameId, userId) {
   useEffect(() => {
     if (gameStatus !== 'playing') return
 
-    let lastPosUpdate = 0
     let lastBallUpdate = 0
+    const POS_UPDATE_INTERVAL = 30 // Envía posición cada 30ms (~33 FPS)
 
     const loop = async (ts) => {
       rafRef.current = requestAnimationFrame(loop)
@@ -247,20 +249,42 @@ export function useGame(gameId, userId) {
             y: result.ball.y,
             vx: result.ball.vx,
             vy: result.ball.vy,
-          }).eq('game_id', gameId)
+          }).eq('game_id', gameId).catch(err => console.error('Error updating ball:', err))
         }
       }
 
-      // Sync my position every ~50ms
+      // Sync my position every POS_UPDATE_INTERVAL ms
       const me = playersRef.current.find(p => p.user_id === userId)
-      if (me && ts - lastPosUpdate > 50) {
-        lastPosUpdate = ts
-        supabase.from('player_positions').upsert({
-          game_id: gameId,
-          user_id: userId,
-          x: me.x,
-          y: me.y,
-        })
+      if (me) {
+        const timeSinceLastUpdate = ts - lastPosUpdateTimeRef.current
+        
+        // Solo envía si ha cambiado significativamente o ha pasado suficiente tiempo
+        const hasSignificantChange = !lastPosRef.current || 
+          Math.abs(me.x - lastPosRef.current.x) > 5 || 
+          Math.abs(me.y - lastPosRef.current.y) > 5
+        
+        if (timeSinceLastUpdate > POS_UPDATE_INTERVAL || hasSignificantChange) {
+          lastPosUpdateTimeRef.current = ts
+          lastPosRef.current = { x: me.x, y: me.y }
+          
+          // Espera la respuesta antes de seguir (mejor sincronización)
+          supabase
+            .from('player_positions')
+            .upsert({
+              game_id: gameId,
+              user_id: userId,
+              x: me.x,
+              y: me.y,
+            })
+            .then(() => {
+              // Posición enviada exitosamente
+            })
+            .catch(err => {
+              console.error('Error updating position:', err)
+              // Reintentar en el siguiente ciclo
+              lastPosUpdateTimeRef.current = 0
+            })
+        }
       }
     }
 
