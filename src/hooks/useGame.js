@@ -178,11 +178,11 @@ export function useGame(gameId, userId) {
   useEffect(() => {
     if (gameStatus !== 'playing') return
 
-    syncIntervalRef.current = setInterval(() => {
+    syncIntervalRef.current = setInterval(async () => {
       const me = playersRef.current.find(p => p.user_id === userId)
       if (me && gameId && userId) {
         console.log(`📍 Syncing position: x=${Math.round(me.x)}, y=${Math.round(me.y)}`)
-        supabase
+        const { error } = await supabase
           .from('player_positions')
           .upsert({
             game_id: gameId,
@@ -190,7 +190,12 @@ export function useGame(gameId, userId) {
             x: me.x,
             y: me.y,
           })
-          .catch(err => console.error('❌ Position sync error:', err))
+        
+        if (error) {
+          console.error('❌ Position sync error:', error)
+        } else {
+          console.log('✅ Position synced')
+        }
       }
     }, 30) // Envía cada 30ms
 
@@ -272,7 +277,7 @@ export function useGame(gameId, userId) {
             y: result.ball.y,
             vx: result.ball.vx,
             vy: result.ball.vy,
-          }).eq('game_id', gameId).catch(err => console.error('❌ Ball sync error:', err))
+          }).eq('game_id', gameId)
         }
       }
     }
