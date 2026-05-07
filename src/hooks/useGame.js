@@ -24,7 +24,7 @@ export function useGame(gameId, userId) {
   const scoresRef = useRef(scores)
   const isHostRef = useRef(false)
   const rafRef = useRef(null)
-  const syncIntervalRef = useRef(null)
+  const lastPositionsRef = useRef({}) // Cache de últimas posiciones enviadas
 
   ballRef.current = ball
   playersRef.current = players
@@ -174,41 +174,12 @@ export function useGame(gameId, userId) {
     }
   }, [])
 
-  // Position sync loop - SEPARATE from game loop
-  useEffect(() => {
-    if (gameStatus !== 'playing') return
-
-    syncIntervalRef.current = setInterval(async () => {
-      const me = playersRef.current.find(p => p.user_id === userId)
-      if (me && gameId && userId) {
-        console.log(`📍 Syncing position: x=${Math.round(me.x)}, y=${Math.round(me.y)}`)
-        const { error } = await supabase
-          .from('player_positions')
-          .upsert({
-            game_id: gameId,
-            user_id: userId,
-            x: me.x,
-            y: me.y,
-          })
-        
-        if (error) {
-          console.error('❌ Position sync error:', error)
-        } else {
-          console.log('✅ Position synced')
-        }
-      }
-    }, 30) // Envía cada 30ms
-
-    return () => {
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current)
-    }
-  }, [gameStatus, gameId, userId])
-
-  // Game loop - ONLY for physics and state updates
+  // Game loop - Physics + Position sync combined
   useEffect(() => {
     if (gameStatus !== 'playing') return
 
     let lastBallUpdate = 0
+    let lastPosUpdate = 0
 
     const loop = (ts) => {
       rafRef.current = requestAnimationFrame(loop)
@@ -278,6 +249,27 @@ export function useGame(gameId, userId) {
             vx: result.ball.vx,
             vy: result.ball.vy,
           }).eq('game_id', gameId)
+        }
+      }
+
+      // Sync player position every ~16ms (solo si cambió significativamente)
+      if (ts - lastPosUpdate > 16) {
+        lastPosUpdate = ts
+        const me = playersRef.current.find(p => p.user_id === userId)
+        if (me && gameId && userId) {
+          // Solo envía si la posición cambió más de 2px desde la última vez
+          const lastPos = lastPositionsRef.current
+          if (!lastPos || Math.hypot(me.x - lastPos.x, me.y - lastPos.y) > 2) {
+            lastPositionsRef.current = { x: me.x, y: me.y }
+            supabase
+              .from('player_positions')
+              .upsert({
+                game_id: gameId,
+                user_id: userId,
+                x: me.x,
+                y: me.y,
+              })
+          }
         }
       }
     }
