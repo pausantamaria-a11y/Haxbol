@@ -113,15 +113,22 @@ export function useGame(gameId, userId) {
           const existing = new Map(prev.map(p => [p.user_id, p]))
           const nextPlayers = dbPlayers.map(gp => {
             const pos = dbPositions?.find(p => p.user_id === gp.user_id)
+            const existingPlayer = existing.get(gp.user_id)
+            const isMe = gp.user_id === userId
             return {
-              ...existing.get(gp.user_id),
+              ...existingPlayer,
               user_id: gp.user_id,
               username: gp.profiles?.username || 'Player',
               team: gp.team,
-              x: pos?.x ?? existing.get(gp.user_id)?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75),
-              y: pos?.y ?? existing.get(gp.user_id)?.y ?? FIELD.HEIGHT / 2,
-              vx: existing.get(gp.user_id)?.vx ?? 0,
-              vy: existing.get(gp.user_id)?.vy ?? 0,
+              // Never overwrite local player with potentially stale DB data.
+              x: isMe
+                ? (existingPlayer?.x ?? pos?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75))
+                : (pos?.x ?? existingPlayer?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75)),
+              y: isMe
+                ? (existingPlayer?.y ?? pos?.y ?? FIELD.HEIGHT / 2)
+                : (pos?.y ?? existingPlayer?.y ?? FIELD.HEIGHT / 2),
+              vx: existingPlayer?.vx ?? 0,
+              vy: existingPlayer?.vy ?? 0,
             }
           })
           playersRef.current = nextPlayers
@@ -333,12 +340,12 @@ export function useGame(gameId, userId) {
             lastPositionsRef.current = { x: me.x, y: me.y }
             supabase
               .from('player_positions')
-              .update({
+              .upsert({
+                game_id: gameId,
+                user_id: userId,
                 x: me.x,
                 y: me.y,
-              })
-              .eq('game_id', gameId)
-              .eq('user_id', userId)
+              }, { onConflict: 'game_id,user_id' })
           }
         }
       }
