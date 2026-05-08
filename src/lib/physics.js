@@ -1,9 +1,8 @@
 import { BALL, FIELD, PLAYER } from './constants'
 
 export function stepPhysics(ball, players) {
-  // Gravity and damping
+  // Damping only: no gravity in top-down HaxBall style physics
   const newBall = { ...ball }
-  newBall.vy += 0.3 // gravity
   newBall.vx *= BALL.DAMPING
   newBall.vy *= BALL.DAMPING
   newBall.x += newBall.vx

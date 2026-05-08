@@ -184,6 +184,8 @@ export function useGame(gameId, userId) {
     const loop = (ts) => {
       rafRef.current = requestAnimationFrame(loop)
 
+      let localPlayerSnapshot = null
+
       // Update my player position from keys
       setPlayers(prev => {
         let dx = 0, dy = 0
@@ -196,23 +198,29 @@ export function useGame(gameId, userId) {
           dy = (dy / len) * PLAYER.SPEED
         }
 
-        return prev.map(p => {
+        const nextPlayers = prev.map(p => {
           if (p.user_id !== userId) return p
           const newVx = (p.vx || 0) * PLAYER.FRICTION + dx
           const newVy = (p.vy || 0) * PLAYER.FRICTION + dy
-          return {
+          const next = {
             ...p,
             x: Math.max(PLAYER.RADIUS, Math.min(FIELD.WIDTH - PLAYER.RADIUS, p.x + newVx)),
             y: Math.max(PLAYER.RADIUS, Math.min(FIELD.HEIGHT - PLAYER.RADIUS, p.y + newVy)),
             vx: newVx,
             vy: newVy,
           }
+          localPlayerSnapshot = next
+          return next
         })
+
+        playersRef.current = nextPlayers
+        return nextPlayers
       })
 
       // Only host runs physics for ball
       if (isHostRef.current) {
         const result = stepPhysics(ballRef.current, playersRef.current)
+        ballRef.current = result.ball
         setBall(result.ball)
 
         if (result.scored) {
@@ -255,7 +263,7 @@ export function useGame(gameId, userId) {
       // Sync player position every ~16ms (solo si cambió significativamente)
       if (ts - lastPosUpdate > 16) {
         lastPosUpdate = ts
-        const me = playersRef.current.find(p => p.user_id === userId)
+        const me = localPlayerSnapshot || playersRef.current.find(p => p.user_id === userId)
         if (me && gameId && userId) {
           // Solo envía si la posición cambió más de 2px desde la última vez
           const lastPos = lastPositionsRef.current
@@ -268,7 +276,7 @@ export function useGame(gameId, userId) {
                 user_id: userId,
                 x: me.x,
                 y: me.y,
-              })
+              }, { onConflict: 'game_id,user_id' })
           }
         }
       }

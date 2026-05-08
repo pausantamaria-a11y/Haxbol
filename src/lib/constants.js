@@ -1,6 +1,6 @@
 export const PLAYER = {
   RADIUS: 15,
-  SPEED: 3,
+  SPEED: 1.2,
   FRICTION: 0.9,
   MASS: 1,
 }

@@ -46,16 +46,16 @@ export function useMatchmaking(userId) {
           team,
         })
 
-        // Start game if we now have >= 2 players and it was waiting
+        // Start immediately once at least one player is in the game
         const newCount = available.game_players.length + 1
-        if (available.status === 'waiting' && newCount >= 2) {
+        if (available.status === 'waiting' && newCount >= 1) {
           await supabase.from('games').update({ status: 'playing' }).eq('id', targetGameId)
         }
       } else {
         // Create a new game
         const { data: newGame, error: cgErr } = await supabase
           .from('games')
-          .insert({ status: 'waiting' })
+          .insert({ status: 'playing' })
           .select()
           .single()
 
