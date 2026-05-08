@@ -55,7 +55,11 @@ export function useGame(gameId, userId) {
         .eq('game_id', gameId)
         .single()
 
-      if (ballData) setBall(ballData)
+      if (ballData) {
+        const nextBall = { x: ballData.x, y: ballData.y, vx: ballData.vx, vy: ballData.vy }
+        setBall(nextBall)
+        ballRef.current = nextBall
+      }
 
       const { data: positions } = await supabase
         .from('player_positions')
@@ -75,6 +79,7 @@ export function useGame(gameId, userId) {
         }
       })
       setPlayers(merged)
+      playersRef.current = merged
 
       const { data: gameData } = await supabase
         .from('games')
@@ -91,6 +96,48 @@ export function useGame(gameId, userId) {
 
     init()
   }, [gameId, userId])
+
+  // Fallback synchronization when realtime events are delayed/lost
+  useEffect(() => {
+    if (!gameId || gameStatus !== 'playing') return
+
+    const interval = setInterval(async () => {
+      const [{ data: dbPositions }, { data: dbBall }, { data: dbPlayers }] = await Promise.all([
+        supabase.from('player_positions').select('*').eq('game_id', gameId),
+        supabase.from('ball_state').select('*').eq('game_id', gameId).maybeSingle(),
+        supabase.from('game_players').select('user_id, team, profiles(username)').eq('game_id', gameId),
+      ])
+
+      if (dbPlayers) {
+        setPlayers(prev => {
+          const existing = new Map(prev.map(p => [p.user_id, p]))
+          const nextPlayers = dbPlayers.map(gp => {
+            const pos = dbPositions?.find(p => p.user_id === gp.user_id)
+            return {
+              ...existing.get(gp.user_id),
+              user_id: gp.user_id,
+              username: gp.profiles?.username || 'Player',
+              team: gp.team,
+              x: pos?.x ?? existing.get(gp.user_id)?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75),
+              y: pos?.y ?? existing.get(gp.user_id)?.y ?? FIELD.HEIGHT / 2,
+              vx: existing.get(gp.user_id)?.vx ?? 0,
+              vy: existing.get(gp.user_id)?.vy ?? 0,
+            }
+          })
+          playersRef.current = nextPlayers
+          return nextPlayers
+        })
+      }
+
+      if (dbBall && !isHostRef.current) {
+        const nextBall = { x: dbBall.x, y: dbBall.y, vx: dbBall.vx, vy: dbBall.vy }
+        ballRef.current = nextBall
+        setBall(nextBall)
+      }
+    }, 150)
+
+    return () => clearInterval(interval)
+  }, [gameId, gameStatus])
 
   // Realtime subscriptions
   useEffect(() => {
@@ -116,37 +163,52 @@ export function useGame(gameId, userId) {
 
           if (!gamePlayers) return
 
+          const { data: positions } = await supabase
+            .from('player_positions')
+            .select('*')
+            .eq('game_id', gameId)
+
           const sorted = [...gamePlayers].sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at))
           isHostRef.current = sorted[0]?.user_id === userId
 
           setPlayers(prev => {
             const existing = new Map(prev.map(p => [p.user_id, p]))
-            return gamePlayers.map(gp => ({
+            const nextPlayers = gamePlayers.map(gp => {
+              const pos = positions?.find(p => p.user_id === gp.user_id)
+              return ({
               ...existing.get(gp.user_id),
               user_id: gp.user_id,
               username: gp.profiles?.username || 'Player',
               team: gp.team,
-              x: existing.get(gp.user_id)?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75),
-              y: existing.get(gp.user_id)?.y ?? FIELD.HEIGHT / 2,
+              x: pos?.x ?? existing.get(gp.user_id)?.x ?? (gp.team === 'red' ? FIELD.WIDTH * 0.25 : FIELD.WIDTH * 0.75),
+              y: pos?.y ?? existing.get(gp.user_id)?.y ?? FIELD.HEIGHT / 2,
               vx: existing.get(gp.user_id)?.vx ?? 0,
               vy: existing.get(gp.user_id)?.vy ?? 0,
-            }))
+            })})
+            playersRef.current = nextPlayers
+            return nextPlayers
           })
         }
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ball_state', filter: `game_id=eq.${gameId}` },
         ({ new: b }) => {
           if (b && !isHostRef.current) {
-            setBall({ x: b.x, y: b.y, vx: b.vx, vy: b.vy })
+            const nextBall = { x: b.x, y: b.y, vx: b.vx, vy: b.vy }
+            ballRef.current = nextBall
+            setBall(nextBall)
           }
         }
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'player_positions', filter: `game_id=eq.${gameId}` },
         ({ new: pos }) => {
           if (pos && pos.user_id !== userId) {
-            setPlayers(prev => prev.map(p =>
-              p.user_id === pos.user_id ? { ...p, x: pos.x, y: pos.y } : p
-            ))
+            setPlayers(prev => {
+              const nextPlayers = prev.map(p =>
+                p.user_id === pos.user_id ? { ...p, x: pos.x, y: pos.y } : p
+              )
+              playersRef.current = nextPlayers
+              return nextPlayers
+            })
           }
         }
       )
@@ -248,8 +310,8 @@ export function useGame(gameId, userId) {
           return
         }
 
-        // Sync ball to DB every ~100ms
-        if (ts - lastBallUpdate > 100) {
+        // Sync ball to DB every ~50ms
+        if (ts - lastBallUpdate > 50) {
           lastBallUpdate = ts
           supabase.from('ball_state').update({
             x: result.ball.x,
@@ -260,23 +322,23 @@ export function useGame(gameId, userId) {
         }
       }
 
-      // Sync player position every ~16ms (solo si cambió significativamente)
-      if (ts - lastPosUpdate > 16) {
+      // Sync player position every ~50ms
+      if (ts - lastPosUpdate > 50) {
         lastPosUpdate = ts
         const me = localPlayerSnapshot || playersRef.current.find(p => p.user_id === userId)
         if (me && gameId && userId) {
-          // Solo envía si la posición cambió más de 2px desde la última vez
+          // Only send meaningful movement deltas
           const lastPos = lastPositionsRef.current
-          if (!lastPos || Math.hypot(me.x - lastPos.x, me.y - lastPos.y) > 2) {
+          if (!lastPos || Math.hypot(me.x - lastPos.x, me.y - lastPos.y) > 0.5) {
             lastPositionsRef.current = { x: me.x, y: me.y }
             supabase
               .from('player_positions')
-              .upsert({
-                game_id: gameId,
-                user_id: userId,
+              .update({
                 x: me.x,
                 y: me.y,
-              }, { onConflict: 'game_id,user_id' })
+              })
+              .eq('game_id', gameId)
+              .eq('user_id', userId)
           }
         }
       }

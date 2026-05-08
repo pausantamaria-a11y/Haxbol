@@ -23,15 +23,19 @@ export function useMatchmaking(userId) {
         .from('games')
         .select('id, status, game_players(*)')
         .in('status', ['waiting', 'playing'])
-        .order('created_at', { ascending: true })
-        .limit(10)
+        .order('created_at', { ascending: false })
+        .limit(30)
 
       if (gErr) throw gErr
 
       // Find a game the user isn't already in
-      const available = (games || []).find(g =>
+      const availableGames = (games || []).filter(g =>
         !g.game_players.some(p => p.user_id === userId)
       )
+      const available =
+        availableGames.find(g => g.game_players.length === 1) ||
+        availableGames.find(g => g.game_players.length === 0) ||
+        availableGames[0]
 
       let targetGameId
 
