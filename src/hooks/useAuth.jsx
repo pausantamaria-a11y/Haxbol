@@ -9,28 +9,70 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user?.id) {
-        supabase.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
-          setProfile(data)
-        })
-      }
-      setLoading(false)
-    })
+    let isMounted = true
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user?.id) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-        setProfile(data)
-      } else {
+    const loadProfile = async (userId) => {
+      if (!userId) return null
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Error loading profile:', error)
+        return null
+      }
+
+      return data
+    }
+
+    const initializeAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) {
+          console.error('Error restoring session:', error)
+        }
+
+        if (!isMounted) return
+
+        const currentUser = session?.user ?? null
+        setUser(currentUser)
+        setProfile(await loadProfile(currentUser?.id))
+      } catch (error) {
+        console.error('Unexpected auth initialization error:', error)
+        if (!isMounted) return
+        setUser(null)
         setProfile(null)
+      } finally {
+        if (isMounted) {
+          setLoading(false)
+        }
       }
-      setLoading(false)
+    }
+
+    initializeAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!isMounted) return
+
+      setUser(session?.user ?? null)
+
+      // Supabase recommends avoiding async/await directly inside this callback.
+      queueMicrotask(async () => {
+        if (!isMounted) return
+        setProfile(await loadProfile(session?.user?.id))
+        if (isMounted) {
+          setLoading(false)
+        }
+      })
     })
 
-    return () => subscription?.unsubscribe()
+    return () => {
+      isMounted = false
+      subscription?.unsubscribe()
+    }
   }, [])
 
   const signUp = async (email, password, username) => {
